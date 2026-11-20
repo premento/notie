@@ -71,6 +71,12 @@
           <button onclick="date()">Date</button>
         </div>
 
+        <div style="margin-bottom:20px;padding-left:50px;padding-right:50px;">
+          <button onclick="escaped()">Escaped text</button>
+          <button onclick="handle()">Handle / hide()</button>
+          <button onclick="notie.hideAll()">hideAll()</button>
+        </div>
+
         <div><b>Official demo page:</b></div>
         <a href="https://jaredreich.com/notie" target="_blank" style="font-size:12px;">https://jaredreich.com/notie</a>
 
@@ -86,6 +92,23 @@
 
       function success () {
         notie.alert({ type: 1, text: 'Success!', time: 2 })
+      }
+
+      // escapeHtml renders the string as inert text instead of markup.
+      // Use this for anything that can contain user input.
+      function escaped () {
+        notie.alert({
+          type: 4,
+          text: '<img src=x onerror="alert(1)"> is shown, not executed',
+          escapeHtml: true,
+          time: 4
+        })
+      }
+
+      // Every method returns a handle that can dismiss the element itself.
+      function handle () {
+        var h = notie.alert({ type: 5, text: 'Dismissing in 1 second...', stay: true })
+        setTimeout(function () { h.hide() }, 1000)
       }
 
       function warning () {

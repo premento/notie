@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>notie test suite</title>
+    <link rel="stylesheet" href="../dist/notie.css">
+    <style>
+      body { font-family: ui-monospace, Menlo, Consolas, monospace; margin: 0; padding: 24px 24px 120px; background: #15181d; color: #e6e6e6; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      #summary { font-size: 15px; margin: 12px 0 18px; padding: 10px 14px; border-radius: 4px; background: #23272e; }
+      #summary.pass { background: #1d4023; }
+      #summary.fail { background: #4a1f1f; }
+      ol { padding-left: 28px; margin: 0; }
+      li { margin: 3px 0; line-height: 1.5; }
+      .ok { color: #7ddc8b; }
+      .bad { color: #ff8a7a; font-weight: bold; }
+      .detail { color: #9aa3ae; }
+    </style>
+  </head>
+  <body>
+    <h1>notie automated regression suite</h1>
+    <div id="summary">running&hellip;</div>
+    <ol id="results"></ol>
+
+    <script src="../dist/notie.js"></script>
+    <script>
+      var results = document.getElementById('results')
+      var summary = document.getElementById('summary')
+      var passed = 0
+      var failed = 0
+      var xssFired = false
+
+      window.__xss = function () { xssFired = true }
+
+      function record (name, ok, detail) {
+        var li = document.createElement('li')
+        li.innerHTML = '<span class="' + (ok ? 'ok' : 'bad') + '">' +
+          (ok ? 'PASS' : 'FAIL') + '</span> ' + name +
+          (detail ? ' <span class="detail">- ' + detail + '</span>' : '')
+        results.appendChild(li)
+        ok ? passed++ : failed++
+      }
+
+      function wait (ms) {
+        return new Promise(function (r) { setTimeout(r, ms) })
+      }
+
+      // Version-tolerant so the identical suite can also be run against the
+      // original v4.3.1 build, which has no hideAll().
+      function cleanup () {
+        if (notie.hideAll) notie.hideAll()
+        else notie.hideAlerts()
+      }
+
+      function reset () {
+        cleanup()
+        // Hard sweep so a failure in one test cannot poison the next. This
+        // runs *before* each test, never between an action and its assertion.
+        var strays = document.querySelectorAll('.notie-container, .notie-overlay')
+        for (var s = 0; s < strays.length; s++) {
+          if (strays[s].parentNode) strays[s].parentNode.removeChild(strays[s])
+        }
+        notie.setOptions({
+          alertTime: 3,
+          transitionDuration: 0.3,
+          overlayClickDismiss: true,
+          escapeHtml: false,
+          classes: {
+            backgroundSuccess: 'notie-background-success',
+            alert: 'notie-alert'
+          },
+          positions: {
+            alert: 'top', force: 'top', confirm: 'top',
+            input: 'top', select: 'bottom', date: 'top'
+          }
+        })
+        return wait(400)
+      }
+
+      function count (selector) {
+        return document.querySelectorAll(selector).length
+      }
+
+      var tests = []
+      function test (name, fn) { tests.push({ name: name, fn: fn }) }
+
+      // ---------------------------------------------------------------
+      // 1. ReferenceError in the default-parameter expression
+      //    `position = options.positions.alert || position.top`
+      // ---------------------------------------------------------------
+      test('falsy configured position does not throw a ReferenceError', async function () {
+        notie.setOptions({ positions: { alert: undefined } })
+        var threw = null
+        try {
+          notie.alert({ text: 'position fallback', time: 1 })
+        } catch (e) {
+          threw = e
+        }
+        cleanup()
+        await wait(50)
+        return { ok: threw === null, detail: threw ? String(threw) : 'fell back to top' }
+      })
+
+      // ---------------------------------------------------------------
+      // 2. typeToClassLookup was frozen at module load, so setOptions()
+      //    could never change a background class.
+      // ---------------------------------------------------------------
+      test('setOptions({ classes }) affects type background classes', async function () {
+        notie.setOptions({ classes: { backgroundSuccess: 'custom-success' } })
+        notie.alert({ type: 1, text: 'custom class', time: 1 })
+        await wait(60)
+        var ok = count('.custom-success') === 1
+        cleanup()
+        await wait(50)
+        return { ok: ok, detail: ok ? 'custom-success applied' : 'still using the stale lookup' }
+      })
+
+      // ---------------------------------------------------------------
+      // 3. options.classes.selectChoice was never defined, so every
+      //    choice got a literal class named "undefined".
+      // ---------------------------------------------------------------
+      test('select choices do not get a literal "undefined" class', async function () {
+        notie.select({
+          text: 'pick', choices: [
+            { text: 'a', handler: function () {} },
+            { text: 'b', handler: function () {} }
+          ]
+        })
+        await wait(60)
+        var undef = count('.undefined')
+        var hook = count('.notie-select-choice')
+        cleanup()
+        await wait(50)
+        return {
+          ok: undef === 0 && hook === 2,
+          detail: '"undefined" classes: ' + undef + ', .notie-select-choice: ' + hook
+        }
+      })
+
+      // ---------------------------------------------------------------
+      // 4. Overlay leak: opening a new dialog from a callback while the
+      //    previous overlay was still fading out made getElementById
+      //    return the OLD overlay, stranding the new one on screen.
+      // ---------------------------------------------------------------
+      test('rapid nested dialogs leave no stranded overlay', async function () {
+        notie.setOptions({ transitionDuration: 0.3 })
+        notie.confirm({
+          text: 'first',
+          submitCallback: function () {
+            notie.confirm({ text: 'second', submitCallback: function () {} })
+            // Submit the second dialog well inside the first overlay's
+            // 300ms fade-out window.
+            setTimeout(function () {
+              var buttons = document.querySelectorAll('.notie-background-success')
+              if (buttons.length) buttons[buttons.length - 1].click()
+            }, 40)
+          }
+        })
+        await wait(60)
+        document.querySelector('.notie-background-success').click()
+        await wait(800)
+        var left = count('.notie-overlay')
+        cleanup()
+        await wait(400)
+        return { ok: left === 0, detail: 'overlays left on screen: ' + left }
+      })
+
+      // ---------------------------------------------------------------
+      // 5. select() wrote a default `type` back into the caller's array.
+      // ---------------------------------------------------------------
+      test('select() does not mutate the caller choices array', async function () {
+        var choices = [
+          { text: 'a', handler: function () {} },
+          { text: 'b', handler: function () {} }
+        ]
+        notie.select({ text: 'pick', choices: choices })
+        await wait(60)
+        var mutated = choices.some(function (c) { return 'type' in c })
+        cleanup()
+        await wait(50)
+        return { ok: !mutated, detail: mutated ? 'type was written back' : 'array untouched' }
+      })
+
+      // ---------------------------------------------------------------
+      // 6. date() mutated the Date object it was handed.
+      // ---------------------------------------------------------------
+      test('date() does not mutate the caller Date object', async function () {
+        var original = new Date(2015, 8, 27)
+        var snapshot = original.getTime()
+        notie.date({ value: original, submitCallback: function () {} })
+        await wait(60)
+        // Advance the day three times via the up arrow.
+        var ups = document.querySelectorAll('.notie-date-selector-up')
+        ups[1].click(); ups[1].click(); ups[1].click()
+        await wait(30)
+        var unchanged = original.getTime() === snapshot
+        cleanup()
+        await wait(50)
+        return { ok: unchanged, detail: unchanged ? 'caller Date preserved' : 'caller Date was advanced' }
+      })
+
+      // ---------------------------------------------------------------
+      // 7. XSS: escapeHtml renders markup as inert text.
+      // ---------------------------------------------------------------
+      test('escapeHtml:true neutralises an injected payload', async function () {
+        xssFired = false
+        var payload = '<img src=x onerror="window.__xss()">'
+        notie.alert({ text: payload, escapeHtml: true, time: 1 })
+        await wait(150)
+        var box = document.querySelector('.notie-textbox-inner')
+        var textual = box && box.textContent === payload && box.querySelector('img') === null
+        cleanup()
+        await wait(50)
+        return {
+          ok: textual && !xssFired,
+          detail: 'handler fired: ' + xssFired + ', rendered as text: ' + !!textual
+        }
+      })
+
+      // ---------------------------------------------------------------
+      // 8. Back-compat: HTML in text still works when escaping is off.
+      // ---------------------------------------------------------------
+      test('HTML in text still renders when escapeHtml is off (back-compat)', async function () {
+        notie.alert({ type: 2, text: 'Warning<br><b>with</b><i>HTML</i>', time: 1 })
+        await wait(60)
+        var box = document.querySelector('.notie-textbox-inner')
+        var ok = !!(box && box.querySelector('b') && box.querySelector('i'))
+        cleanup()
+        await wait(50)
+        return { ok: ok, detail: ok ? '<b>/<i> preserved' : 'markup was lost' }
+      })
+
+      // ---------------------------------------------------------------
+      // 9. classList.add() throws on class names containing whitespace.
+      // ---------------------------------------------------------------
+      test('multi-token class option does not throw', async function () {
+        notie.setOptions({ classes: { alert: 'notie-alert extra-token' } })
+        var threw = null
+        try {
+          notie.alert({ text: 'multi token', time: 1 })
+        } catch (e) { threw = e }
+        await wait(60)
+        var ok = threw === null && count('.extra-token') === 1
+        cleanup()
+        await wait(50)
+        return { ok: ok, detail: threw ? String(threw) : 'both tokens applied' }
+      })
+
+      // ---------------------------------------------------------------
+      // 10. An unrecognised `allowed` shorthand produced [^] which
+      //     stripped every character the user typed.
+      // ---------------------------------------------------------------
+      test('unknown "allowed" shorthand does not erase typed input', async function () {
+        notie.input({ text: 'type', allowed: ['zzz'], submitCallback: function () {} })
+        await wait(60)
+        var field = document.querySelector('.notie-input-field')
+        field.value = 'hello'
+        field.oninput && field.oninput()
+        var kept = field.value
+        cleanup()
+        await wait(50)
+        return { ok: kept === 'hello', detail: 'value after input: "' + kept + '"' }
+      })
+
+      // ---------------------------------------------------------------
+      // 11. Accessibility wiring.
+      // ---------------------------------------------------------------
+      test('dialogs expose role/aria and focusable buttons', async function () {
+        notie.confirm({ text: 'a11y', submitCallback: function () {} })
+        await wait(80)
+        var dialog = document.querySelector('[role="dialog"]')
+        var buttons = document.querySelectorAll('.notie-button[role="button"][tabindex="0"]')
+        var labelled = dialog && dialog.getAttribute('aria-labelledby') &&
+          document.getElementById(dialog.getAttribute('aria-labelledby'))
+        var focused = dialog && dialog.contains(document.activeElement)
+        cleanup()
+        await wait(50)
+        return {
+          ok: !!dialog && buttons.length === 2 && !!labelled && !!focused,
+          detail: 'dialog:' + !!dialog + ' buttons:' + buttons.length +
+            ' labelled:' + !!labelled + ' focus-moved-in:' + !!focused
+        }
+      })
+
+      test('alerts expose role="alert"', async function () {
+        notie.alert({ type: 3, text: 'error', time: 1 })
+        await wait(60)
+        var el = document.querySelector('[role="alert"]')
+        var live = el && el.getAttribute('aria-live')
+        cleanup()
+        await wait(50)
+        return { ok: !!el && live === 'assertive', detail: 'aria-live=' + live }
+      })
+
+      // ---------------------------------------------------------------
+      // 12. Keyboard: Enter must act on the top of the stack only.
+      // ---------------------------------------------------------------
+      test('Escape dismisses via the cancel path and runs its callback', async function () {
+        var cancelled = false
+        notie.confirm({
+          text: 'escape me',
+          submitCallback: function () {},
+          cancelCallback: function () { cancelled = true }
+        })
+        await wait(80)
+        var event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+        window.dispatchEvent(event)
+        await wait(400)
+        var gone = count('.notie-overlay') === 0
+        return { ok: cancelled && gone, detail: 'cancelCallback:' + cancelled + ' overlay cleared:' + gone }
+      })
+
+      // ---------------------------------------------------------------
+      // 13. New API surface.
+      // ---------------------------------------------------------------
+      test('methods return a handle that can dismiss programmatically', async function () {
+        var handle = notie.alert({ text: 'handle me', stay: true })
+        await wait(60)
+        var openNow = handle.isOpen() && count('.notie-alert') === 1
+        handle.hide()
+        await wait(400)
+        var closedNow = !handle.isOpen() && count('.notie-alert') === 0
+        return {
+          ok: openNow && closedNow && typeof handle.id === 'string',
+          detail: 'open:' + openNow + ' closed-after-hide:' + closedNow
+        }
+      })
+
+      test('hideAll() dismisses dialogs and their overlays', async function () {
+        notie.confirm({ text: 'close me', submitCallback: function () {} })
+        await wait(80)
+        var before = count('.notie-overlay')
+        var done = false
+        notie.hideAll(function () { done = true })
+        await wait(450)
+        return {
+          ok: before === 1 && count('.notie-overlay') === 0 && done,
+          detail: 'overlays ' + before + ' -> ' + count('.notie-overlay') + ', callback:' + done
+        }
+      })
+
+      // ---------------------------------------------------------------
+      // 14. No stray listeners / leaked nodes after everything closes.
+      // ---------------------------------------------------------------
+      test('nothing is left in the DOM after all elements close', async function () {
+        notie.alert({ text: 'a', time: 1 })
+        await wait(30)
+        notie.confirm({ text: 'b', submitCallback: function () {} })
+        await wait(30)
+        cleanup()
+        await wait(500)
+        var left = count('.notie-container') + count('.notie-overlay')
+        return { ok: left === 0, detail: 'leftover nodes: ' + left }
+      })
+
+      // ---------------------------------------------------------------
+      // 15. Input attribute hygiene.
+      // ---------------------------------------------------------------
+      test('invalid empty/legacy input attributes are not emitted', async function () {
+        notie.input({ text: 'attrs', submitCallback: function () {} })
+        await wait(60)
+        var field = document.querySelector('.notie-input-field')
+        var bad = ['max', 'maxlength', 'min', 'minlength', 'placeholder']
+          .filter(function (a) { return field.hasAttribute(a) })
+        var inputmode = field.getAttribute('inputmode')
+        cleanup()
+        await wait(50)
+        return {
+          ok: bad.length === 0 && inputmode === null,
+          detail: 'empty attrs emitted: [' + bad.join(',') + '], inputmode=' + inputmode
+        }
+      })
+
+      // ---------------------------------------------------------------
+      // run
+      // ---------------------------------------------------------------
+      ;(async function () {
+        for (var i = 0; i < tests.length; i++) {
+          await reset()
+          var t = tests[i]
+          try {
+            var outcome = await t.fn()
+            record(t.name, outcome.ok, outcome.detail)
+          } catch (e) {
+            record(t.name, false, 'threw: ' + e)
+          }
+        }
+        await reset()
+        summary.textContent = passed + ' passed, ' + failed + ' failed'
+        summary.className = failed ? 'fail' : 'pass'
+        document.title = failed ? 'FAIL (' + failed + ')' : 'ALL PASS'
+      })()
+    </script>
+  </body>
+</html>

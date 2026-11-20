@@ -18,19 +18,32 @@ Live demo: [https://jaredreich.com/notie](https://jaredreich.com/notie)
 
 ## Features
 
-* Pure JavaScript, no dependencies, written in ES6
+* Pure JavaScript, no dependencies and no polyfills required, written in ES6
 * Easily customizable
 * Change colors to match your style/brand
 * Modify styling with the sass file (notie.scss) or overwrite the CSS
 * Font size auto-adjusts based on screen size
+* Accessible: dialogs are exposed as `role="dialog"`, alerts as `role="alert"`,
+  buttons are keyboard operable and focus is trapped and restored
+* Honours `prefers-reduced-motion`
+* Ships TypeScript definitions
 
 ## Browser Support
+
+The UMD bundles (`dist/notie.js`, `dist/notie.min.js`) are compiled to ES5 and
+use no ES6 runtime APIs, so no polyfill is needed:
 
 * IE 10+
 * Chrome 11+
 * Firefox 4+
 * Safari 5.1+
 * Opera 11.5+
+
+`dist/notie.esm.js` targets ES2017 and is what bundlers pick up via the
+`module` / `exports` fields.
+
+Progressive enhancements degrade quietly on older engines: `prefers-reduced-motion`,
+`:focus-visible` focus rings and `crypto.randomUUID` are all feature-detected.
 
 ## Installation
 
@@ -65,7 +78,7 @@ npm install notie
 ```js
 import notie from 'notie'
 // or
-import { alert, force, confirm, input, select, date, setOptions, hideAlerts } from 'notie'
+import { alert, force, confirm, input, select, date, setOptions, hideAlerts, hideAll } from 'notie'
 ```
 
 #### Browser:
@@ -75,7 +88,44 @@ notie
 window.notie
 ```
 
+## Security
+
+By default `text` and every button label are inserted as **HTML**, which is what
+makes `notie.alert({ text: 'Warning<br><b>with</b> HTML' })` work. That also
+means any untrusted value you interpolate into those strings is an XSS sink:
+
+```js
+// DANGEROUS if `comment` came from a user
+notie.alert({ text: 'New comment: ' + comment })
+```
+
+Turn on `escapeHtml` to render strings as inert text instead. It can be set
+globally or per call:
+
+```js
+// globally - recommended for apps that show user-generated content
+notie.setOptions({ escapeHtml: true })
+
+// or per call
+notie.alert({ text: untrustedValue, escapeHtml: true })
+```
+
+The default stays `false` for backwards compatibility. If you only need markup
+in a few places, switch escaping on globally and pass `escapeHtml: false` for
+the specific calls that need HTML.
+
 #### Available methods:
+
+Every method returns a handle so you can dismiss an element yourself:
+
+```js
+const handle = notie.alert({ text: 'Saving...', stay: true })
+handle.id       // the generated DOM id
+handle.element  // the container element
+handle.isOpen() // => true
+handle.hide()   // dismiss without firing any callback
+```
+
 ```js
 notie.alert({
   type: Number|String, // optional, default = 4, enum: [1, 2, 3, 4, 5, 'success', 'warning', 'error', 'info', 'neutral']
@@ -112,15 +162,16 @@ notie.input({
   autocapitalize: 'words', // default: 'none'
   autocomplete: 'on', // default: 'off'
   autocorrect: 'off', // default: 'off'
-  autofocus: 'true', // default: 'true'
-  inputmode: 'latin', // default: 'verbatim'
-  max: '10000',// default: ''
-  maxlength: '10', // default: ''
-  min: '5', // default: ''
-  minlength: '1', // default: ''
-  placeholder: 'Jane Smith', // default: ''
+  autofocus: false, // default: true - set false to leave the field unfocused
+  inputmode: 'numeric', // optional, omitted unless provided
+  max: '10000', // optional, omitted unless provided
+  maxlength: '10', // optional, omitted unless provided
+  min: '5', // optional, omitted unless provided
+  minlength: '1', // optional, omitted unless provided
+  pattern: '[0-9]*', // optional, omitted unless provided
+  placeholder: 'Jane Smith', // optional, omitted unless provided
   value: String, // default: ''
-  spellcheck: 'false', // default: 'default'
+  spellcheck: 'false', // optional, omitted unless provided
   step: '5', // default: 'any'
   type: 'text', // default: 'text'
   allowed: ['an', 's'] // Default: null, 'an' = alphanumeric, 'a' = alpha, 'n' = numeric, 's' = spaces allowed. Can be custom RegExp, ex. allowed: new RegExp('[^0-9]', 'g')
@@ -333,7 +384,9 @@ notie.setOptions({
   overlayOpacity: 0.75,
   transitionCurve: 'ease',
   transitionDuration: 0.3,
-  transitionSelector: 'all'
+  transitionSelector: 'all',
+  escapeHtml: false, // render text/labels as plain text - see Security above
+  respectReducedMotion: true, // skip transitions when the OS asks for reduced motion
   classes: {
     container: 'notie-container',
     textbox: 'notie-textbox',
@@ -351,6 +404,7 @@ notie.setOptions({
     backgroundOverlay: 'notie-background-overlay',
     alert: 'notie-alert',
     inputField: 'notie-input-field',
+    selectChoice: 'notie-select-choice',
     selectChoiceRepeated: 'notie-select-choice-repeated',
     dateSelectorInner: 'notie-date-selector-inner',
     dateSelectorUp: 'notie-date-selector-up'
@@ -372,6 +426,48 @@ notie.setOptions({
 ```js
 // programmatically hide all alerts with an optional callback function
 notie.hideAlerts(callbackOptional)
+
+// programmatically hide everything notie has on screen, dialogs included
+notie.hideAll(callbackOptional)
+```
+
+## Accessibility
+
+* `force`, `confirm`, `input`, `select` and `date` render as `role="dialog"`
+  with `aria-modal="true"`, labelled by their own text element.
+* `alert` renders as `role="alert"`, with `aria-live="assertive"` for errors
+  and `"polite"` otherwise.
+* Buttons are `role="button"` with `tabindex="0"` and respond to Enter and
+  Space. They remain `<div>` elements, so existing CSS selectors keep working.
+* Focus moves into a dialog when it opens, is trapped with Tab/Shift+Tab while
+  it is open, and is returned to the previously focused element on close.
+* Keyboard handling uses `event.key` (with `keyCode` as a fallback) and is
+  routed only to the top-most element, so one Enter press cannot trigger two
+  dialogs.
+
+## Development
+
+```bash
+npm install
+npm run build   # writes dist/
+npm run dev     # rebuild on change
+```
+
+The build is `esbuild` (bundling + minification), `babel` (ES5 downlevel) and
+`dart-sass`, driven by [build.mjs](build.mjs). It produces:
+
+| File | Format | Target |
+| --- | --- | --- |
+| `dist/notie.js` | UMD | ES5 |
+| `dist/notie.min.js` | UMD, minified | ES5 |
+| `dist/notie.esm.js` | ES module | ES2017 |
+| `dist/notie.css` / `dist/notie.min.css` | CSS | - |
+| `dist/notie.d.ts` | TypeScript definitions | - |
+
+A browser regression suite lives in [test/index.html](test/index.html):
+
+```bash
+node scripts/serve.mjs   # then open http://localhost:8731/test/
 ```
 
 ## License

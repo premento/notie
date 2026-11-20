@@ -16,13 +16,13 @@ $notie-color-neutral: #A0A0A0 !default;
 $notie-color-white: #FFFFFF !default;
 $notie-color-overlay: #FFFFFF !default;
 $notie-content-width: 900px !default;
+$notie-focus-ring-color: $notie-color-text !default;
+$notie-focus-ring-width: 2px !default;
 $notie-z-index: 2147483647 !default;
 
+// `box-shadow` has been unprefixed since Chrome 10 / Safari 5.1 / Firefox 4 /
+// IE 9, and -o-/-ms-/-moz-box-shadow never shipped in any released browser.
 @mixin box-shadow($box-shadow) {
-  -o-box-shadow: $box-shadow;
-  -ms-box-shadow: $box-shadow;
-  -moz-box-shadow: $box-shadow;
-  -webkit-box-shadow: $box-shadow;
   box-shadow: $box-shadow;
 }
 
@@ -39,11 +39,12 @@ $notie-z-index: 2147483647 !default;
   max-width: $notie-content-width;
 }
 
+// -webkit- is still required by Safari; -moz-/-ms- cover legacy Firefox and
+// IE 10/11. -o-user-select never existed.
 @mixin unselectable() {
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
-  -o-user-select: none;
   user-select: none;
 }
 
@@ -151,6 +152,12 @@ $notie-z-index: 2147483647 !default;
   @include border-box-box-sizing();
 }
 
+// Styling hook for every choice rendered by notie.select(). Before this
+// existed the library added a literal class named "undefined" instead.
+.notie-select-choice {
+  @include border-box-box-sizing();
+}
+
 .notie-select-choice-repeated {
   border-bottom: 1px solid rgba(255, 255, 255, 0.2);
 
@@ -168,4 +175,13 @@ $notie-z-index: 2147483647 !default;
 
 .notie-date-selector-up {
   transform: rotate(180deg)
+}
+
+// Buttons are keyboard focusable, so keyboard users need a visible focus ring.
+// Kept in its own rule: browsers without :focus-visible simply drop it and
+// fall back to their default focus outline.
+.notie-button:focus-visible,
+.notie-date-selector-inner [contenteditable]:focus-visible {
+  outline: $notie-focus-ring-width solid $notie-focus-ring-color;
+  outline-offset: -#{$notie-focus-ring-width * 2};
 }
